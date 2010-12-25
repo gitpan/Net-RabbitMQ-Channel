@@ -41,13 +41,47 @@ sub bind {
 	$self->channel->_do ('queue_bind', $self->name, $xchange_name, $routing_key);
 }
 
+sub unbind {
+	my $self = shift;
+	my $xchange = shift;
+	my $routing_key = shift;
+	
+	my $xchange_name = (ref ($xchange) and $xchange->can ('name')) ? $xchange->name : $xchange;
+	
+	$self->channel->_do ('queue_unbind', $self->name, $xchange_name, $routing_key);
+}
+
+
 sub get {
 	my $self = shift;
-	my $opts = shift || {};
+	my $opts = {@_};
 	
 	my ($success, $result) = $self->channel->_do ('get', $self->name, $opts);
 	
 	return $result;
+}
+
+sub consume {
+	my $self = shift;
+	my $opts = {@_};
+	
+	my ($success, $result) = $self->channel->_do ('consume', $self->name, $opts);
+}
+
+sub recv {
+	my $self = shift;
+	#my $opts = {@_};
+	
+	my ($success, $result) = $self->channel->_do_connection ('recv');
+	
+	return $result;
+}
+
+sub purge {
+	my $self    = shift;
+	my $no_wait = $_[0];
+	
+	my ($success, $result) = $self->channel->_do ('purge', $self->name, @_);
 }
 
 1;

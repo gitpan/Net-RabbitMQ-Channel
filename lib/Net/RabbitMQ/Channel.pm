@@ -7,7 +7,7 @@ use Net::RabbitMQ;
 use Net::RabbitMQ::Exchange;
 use Net::RabbitMQ::Queue;
 
-our $VERSION = '0.01';
+our $VERSION = '0.03';
 
 # has 'mq';
 
@@ -16,6 +16,8 @@ has queue_pack    => 'Net::RabbitMQ::Queue';
 
 has 'number';
 
+our @NO_CHANNEL_CALLS = ('recv');
+
 sub new {
 	my $class  = shift;
 	my $number = shift;
@@ -23,6 +25,8 @@ sub new {
 	
 	$config->{mq}     = Net::RabbitMQ->new;
 	$config->{number} = $number;
+	
+	$config->{reconnect_timeout} ||= 10;
 	
 	my $self = bless $config, $class;
 
@@ -56,24 +60,52 @@ sub queue_declare {
 	return $args->{package}->new ($self, $name, %$args);
 }
 
+sub _failed_host_sort_sub {
+	my ($hosts, $sort_a, $sort_b) = @_;
+	return !exists $hosts->{$sort_a}->{failed}
+		? -1
+		: !exists $hosts->{$sort_b}->{failed}
+			? 1
+			: $hosts->{$sort_b}->{failed} <=> $hosts->{$sort_a}->{failed}
+}
+
+
 # here we try to connect, if all servers fails, then die
 sub _confirmed_connect {
 	my $self = shift;
+	my $is_reconnect = shift;
 	
 	my $mq = $self->{mq};
 	
 	local $@;
 	
-	foreach my $host (keys %{$self->{hosts}}) {
+	my $success = 0;
+	
+	my $hosts = $self->{hosts};
+	
+	foreach my $host (sort {_failed_host_sort_sub ($hosts, $a, $b)} keys %$hosts
+	) {
+		my $last_failed = $hosts->{$host}->{failed};
+		if (defined $last_failed and (time - $last_failed < $self->{reconnect_timeout})) {
+			die "no hosts can be reached within $self->{reconnect_timeout} sec. you must check hosts availability or enlarge your interval";
+		}
+		
 		eval {
 			$mq->connect ($host, $self->{hosts}->{$host});
-			$self->_do ('channel_open');
+			$success = 1;
+			$self->_do ('channel_open')
+				unless $is_reconnect;
 		};
 		
-		return 1 unless $@;
+		if ($success) {
+			delete $hosts->{$host}->{failed};
+			return 1
+		} else {
+			$self->{hosts}->{$host}->{failed} = time;
+		}
 	}
 	
-	die "we can't connect to any provided server";
+	die "we can't connect to any provided server: $@, $!";
 }
 
 sub _do {
@@ -92,9 +124,19 @@ sub _do {
 	my $result;
 	my $success = 0;
 	
+	# warn "cmd: $cmd, num: ", $self->number, ", array: @_";
+	
+	# use warnings FATAL => qw(uninitialized);
+
+	my @params = @_;
+	
+	unshift @params, $self->number
+		unless scalar grep {$_ eq $cmd} @NO_CHANNEL_CALLS;
+	
 	# real server work -> we must restart connection after failure
 	eval {
-		$result  = $self->{mq}->$cmd ($self->number, @_);
+		# warn "$cmd ", $self->number;
+		$result  = $self->{mq}->$cmd (@params);
 		$success = 1;
 	};
 	
@@ -103,12 +145,16 @@ sub _do {
 	#use warnings qw(uninitialized);
 	
 	# TODO: check for real connection error, we don't want to run erratical command another time
-	if ($@) {
-		$self->_confirmed_connect ($_[0]); # send channel for reconnect
+	unless ($success) {
+		
+		# warn $@;
+		
+		$self->_confirmed_connect (1); # send flag for reconnect
+		$self->{mq}->channel_open ($self->number);
 		
 		# if we have more than one failure after successful
 		# reconnect, then we must die
-		$result  = $self->{mq}->$cmd ($self->number, @_);
+		$result  = $self->{mq}->$cmd (@params);
 		$success = 1;
 	}
 	
@@ -119,9 +165,17 @@ sub publish {
 	my $self = shift;
 	my $routing_key = shift;
 	my $body = shift;
-	my $opts = shift || {};
+	my $props = {@_};
 	
-	$self->_do ('publish', $routing_key, $body, $opts, @_);
+	my $opts = {};
+	
+	foreach my $k (keys %$props) {
+		if ($k eq 'exchange' or $k eq 'mandatory' or $k eq 'immediate') {
+			$opts->{$k} = delete $props->{$k};
+		}
+	}
+	
+	my ($success, $result) = $self->_do ('publish', $routing_key, $body, $opts, $props);
 }
 
 sub close {
@@ -163,10 +217,10 @@ Net::RabbitMQ::Channel - use rabbitmq, OOP style
 	$queue->bind ($exchange, $publisher_key);
 
 	# publisher part
-	$channel->publish ($publisher_key, $message, {exchange => $exchange->name}, {
+	$exchange->publish ($publisher_key, $message,
 		app_id => 'test',
 		timestamp => time
-	});
+	);
 	
 	# consumer part
 	my $message = $queue->get;

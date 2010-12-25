@@ -4,10 +4,26 @@ use Class::Easy;
 
 use Test::More qw(no_plan);
 
-use Net::RabbitMQ::Channel;
+use_ok 'Net::RabbitMQ::Channel';
+
+my $host = $ENV{'MQHOST'} || "dev.rabbitmq.com";
+
+# reconnect test
+
+my $hosts = {
+	a => {},
+	b => {},
+	c => {failed => 3},
+	d => {failed => 2},
+	e => {failed => 1}
+};
+
+foreach ([keys %$hosts], [reverse keys %$hosts], [sort keys %$hosts], [reverse sort keys %$hosts]) {
+	ok join (', ', sort {Net::RabbitMQ::Channel::_failed_host_sort_sub ($hosts, $a, $b)} @$_) =~ /, c, d, e$/;
+}
 
 my $mqc = Net::RabbitMQ::Channel->new (
-	1, hosts => {'web-devel2.rian.off' => {user => 'guest', password => 'guest'}}
+	1, hosts => {$host => {user => 'guest', password => 'guest'}}
 );
 
 ok ($mqc);
@@ -39,10 +55,8 @@ my $message = "$queue";
 # before consumption
 ok $queue->bind ($xchange, $routing_key);
 
-#$xchange->delete ({if_unused => 0, nowait => 1}); # defaults - {if_unused => 1, nowait => 0}
-
 # publishing
-$mqc->publish ($routing_key, $message, {exchange => $xchange->name}, {app_id => 'test'});
+$mqc->publish ($routing_key, $message, exchange => $xchange->name, app_id => 'test');
 
 # fetching
 my $msg = $queue->get;
@@ -51,5 +65,11 @@ ok defined $msg;
 
 ok $msg->{body} eq $message;
 
-use Data::Dumper;
-diag Dumper $msg;
+ok $queue->unbind ($xchange, $routing_key);
+
+ok $queue->purge;
+
+# ok $xchange->delete (if_unused => 0, nowait => 1); # defaults - {if_unused => 1, nowait => 0}
+
+#use Data::Dumper;
+#diag Dumper $msg;

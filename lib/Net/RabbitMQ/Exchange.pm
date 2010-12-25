@@ -33,4 +33,31 @@ sub new {
 	# if channel didn't open, then we died before this string
 }
 
+sub delete {
+	my $self = shift;
+	my $options = {@_};
+	
+	my ($success, $result) = $self->channel->_do ('exchange_delete', $self->name, $options);
+}
+
+sub publish {
+	my $self = shift;
+	my $routing_key = shift;
+	my $body = shift;
+	my $props = {@_};
+	
+	my $opts = {};
+	
+	foreach my $k (keys %$props) {
+		if ($k eq 'exchange' or $k eq 'mandatory' or $k eq 'immediate') {
+			$opts->{$k} = delete $props->{$k};
+		}
+	}
+	
+	$opts->{exchange} = $self->name;
+	
+	my ($success, $result) = $self->channel->_do ('publish', $routing_key, $body, $opts, $props);
+}
+
+
 1;
