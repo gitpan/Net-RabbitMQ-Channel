@@ -6,7 +6,8 @@ use Test::More qw(no_plan);
 
 use_ok 'Net::RabbitMQ::Channel';
 
-my $host = $ENV{'MQHOST'} || "dev.rabbitmq.com";
+my $host  = $ENV{'MQHOST'} || "dev.rabbitmq.com";
+my $vhost = $ENV{'MQVHOST'};
 
 # reconnect test
 
@@ -22,8 +23,13 @@ foreach ([keys %$hosts], [reverse keys %$hosts], [sort keys %$hosts], [reverse s
 	ok join (', ', sort {Net::RabbitMQ::Channel::_failed_host_sort_sub ($hosts, $a, $b)} @$_) =~ /, c, d, e$/;
 }
 
+my %opts = ();
+
+$opts{vhost} = $vhost
+	if defined $vhost;
+
 my $mqc = Net::RabbitMQ::Channel->new (
-	1, hosts => {$host => {user => 'guest', password => 'guest'}}
+	1, hosts => {$host => {user => 'guest', password => 'guest', %opts}}
 );
 
 ok ($mqc);
@@ -56,7 +62,7 @@ my $message = "$queue";
 ok $queue->bind ($xchange, $routing_key);
 
 # publishing
-$mqc->publish ($routing_key, $message, exchange => $xchange->name, app_id => 'test');
+$xchange->publish ($routing_key, $message, app_id => 'test');
 
 # fetching
 my $msg = $queue->get;
@@ -64,6 +70,36 @@ my $msg = $queue->get;
 ok defined $msg;
 
 ok $msg->{body} eq $message;
+
+######################################################
+# testing parallel fetch from one queue
+
+my $mqc2 = Net::RabbitMQ::Channel->new (
+	1, hosts => {$host => {user => 'guest', password => 'guest', %opts}}
+);
+
+ok ($mqc2);
+
+my $queue2   = $mqc2->queue_declare (
+	"${abc}test_q",
+	passive => 0,
+	durable => 1,
+	exclusive => 0,
+	auto_delete => 0
+);
+ok ($queue2);
+
+$xchange->publish ($routing_key, 1, app_id => 'test');
+$xchange->publish ($routing_key, 2, app_id => 'test');
+$xchange->publish ($routing_key, 3, app_id => 'test');
+$xchange->publish ($routing_key, 4, app_id => 'test');
+
+ok $queue->get->{body}  eq 1;
+ok $queue2->get->{body} eq 2;
+ok $queue->get->{body}  eq 3;
+ok $queue2->get->{body} eq 4;
+
+#######################################################
 
 ok $queue->unbind ($xchange, $routing_key);
 

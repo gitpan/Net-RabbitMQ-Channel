@@ -4,10 +4,14 @@ use Class::Easy;
 
 use Net::RabbitMQ;
 
+unless ($^O eq 'MSWin32') {
+	use Sys::SigAction;
+}
+
 use Net::RabbitMQ::Exchange;
 use Net::RabbitMQ::Queue;
 
-our $VERSION = '0.03';
+our $VERSION = '0.05';
 
 # has 'mq';
 
@@ -91,12 +95,40 @@ sub _confirmed_connect {
 		}
 		
 		eval {
+			if ($^O ne 'MSWin32') {
+				# warn "setting alarm";
+				my $sig_handler = sub {
+					# failed disconnect is safe solution
+					# warn "alarm called";
+					$self->{hosts}->{$host}->{failed} = time;
+					$success = 0;
+					die "timeout";
+				};
+				my $h = Sys::SigAction::set_sig_handler ('ALRM', $sig_handler);
+				$h->{ACT}->{HANDLER} = $sig_handler;
+				#use Data::Dumper;
+				#warn Dumper $h;
+				#$SIG{'ALRM'} = sub {die;};
+				alarm ($self->{timeout} || 10);
+			}
+
+			#warn "before connect";
+
 			$mq->connect ($host, $self->{hosts}->{$host});
-			$success = 1;
 			$self->_do ('channel_open')
 				unless $is_reconnect;
+			$success = 1;
+			
+			#warn "after connect";
+
+			alarm 0;
 		};
 		
+		#warn "after eval, before alarm";
+
+		alarm 0;
+		#warn "after eval";
+
 		if ($success) {
 			delete $hosts->{$host}->{failed};
 			return 1
@@ -105,7 +137,7 @@ sub _confirmed_connect {
 		}
 	}
 	
-	die "we can't connect to any provided server: $@, $!";
+	die "we can't connect to any provided server: $@";
 }
 
 sub _do {

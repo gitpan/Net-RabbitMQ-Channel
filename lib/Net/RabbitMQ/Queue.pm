@@ -72,7 +72,7 @@ sub recv {
 	my $self = shift;
 	#my $opts = {@_};
 	
-	my ($success, $result) = $self->channel->_do_connection ('recv');
+	my ($success, $result) = $self->channel->_do ('recv');
 	
 	return $result;
 }

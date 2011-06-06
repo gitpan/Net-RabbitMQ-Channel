@@ -17,5 +17,7 @@ WriteMakefile(
 	PREREQ_PM => {
 		'Class::Easy'   => '0.11',
 		'Net::RabbitMQ' => '0.1.8',
+		# hello, windows
+		($^O eq 'MSWin32' ? () : ('Sys::SigAction' => '0.11'))
 	}
 );
